@@ -1,35 +1,36 @@
 from .base import BaseScraper
 from playwright.async_api import Locator
 from data_class.raw_data import RawData
-from datetime import datetime
 from dataclasses import asdict
 import asyncio
-import json
-import os
 import traceback
-import pathlib
-from colorama import Fore, Style, init
-
-# Initialize colorama for Windows compatibility
-init(autoreset=True)
 
 
 class PolitifactScraper(BaseScraper):
-    def __init__(self):
-        BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
-
-        super().__init__()
-        self.output_file = BASE_DIR / "outputs/politifact-factcheck.json"
-        self.retry_file = BASE_DIR / "outputs/politifact-factcheck-retry.json"
+    def __init__(self, start_page: int = 92):
+        super().__init__(
+            output_filename="politifact-factcheck",
+            retry_filename="politifact-factcheck-retry",
+        )
+        self.start_page = start_page
 
     async def process(self) -> None:
         await self.start()
 
         # Track page
-        curr_page: int = 1
+        curr_page: int = self.start_page
 
         try:
             while True:
+                if (
+                    curr_page % self.restart_interval == 0
+                    and curr_page != self.start_page
+                ):
+                    print(
+                        f"Restarting browser at page {curr_page} for memory management"
+                    )
+                    await self.restart()
+
                 print(f"Navigating to page {curr_page}")
                 await self.navigate_with_retry(
                     f"https://www.politifact.com/factchecks/list/?page={curr_page}"
@@ -39,10 +40,15 @@ class PolitifactScraper(BaseScraper):
                 articles = await self.locate_articles()
 
                 if len(articles) == 0:
+                    print("No more articles found - scraping complete")
                     break
 
                 print("Extracting URLs from articles")
                 urls = await self.extract_urls(articles)
+
+                if len(urls) == 0:
+                    print("No URLs extracted - may have reached the end")
+                    break
 
                 print("Scraping through article URLs")
                 for url in urls:
@@ -64,23 +70,6 @@ class PolitifactScraper(BaseScraper):
             print(f"Error during scraping: {e}")
         finally:
             await self.quit()
-
-    async def navigate_with_retry(self, url: str, max_retries: int = 3) -> bool:
-        for attempt in range(max_retries):
-            try:
-                print(f"Attempt {attempt + 1}/{max_retries} for {url}")
-                await self.page.goto(
-                    url,
-                    timeout=30000,
-                    wait_until="domcontentloaded",
-                )
-                return True
-            except Exception as e:
-                print(f"Attempt {attempt + 1} failed: {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(5)  # Wait before retry
-                continue
-        return False
 
     async def locate_articles(self) -> list[Locator]:
         return await self.page.locator("div.m-statement__quote > a").all()
@@ -158,63 +147,6 @@ class PolitifactScraper(BaseScraper):
         )
 
         return article_data
-
-    async def append_to_json(self, article_data: dict) -> None:
-        try:
-            # Ensure the outputs directory exists
-            os.makedirs(os.path.dirname(self.output_file), exist_ok=True)
-
-            # Read existing data
-            existing_data = []
-            if os.path.exists(self.output_file):
-                with open(self.output_file, "r", encoding="utf-8") as f:
-                    try:
-                        existing_data = json.load(f)
-                    except json.JSONDecodeError:
-                        existing_data = []
-
-            # Append new article
-            existing_data.append(article_data)
-
-            # Write back to file
-            with open(self.output_file, "w", encoding="utf-8") as f:
-                json.dump(existing_data, f, indent=2, ensure_ascii=False)
-
-            print(
-                f"{Fore.GREEN}✓ Saved article ({len(existing_data)} total articles){Style.RESET_ALL}"
-            )
-
-        except Exception as e:
-            print(f"Error appending to JSON: {e}")
-
-    async def append_to_retry(self, url, reason="") -> None:
-        try:
-            # Ensure the outputs directory exists
-            os.makedirs(os.path.dirname(self.retry_file), exist_ok=True)
-
-            # Read existing data
-            existing_data = []
-            if os.path.exists(self.retry_file):
-                with open(self.retry_file, "r", encoding="utf-8") as f:
-                    try:
-                        existing_data = json.load(f)
-                    except json.JSONDecodeError:
-                        existing_data = []
-
-            # Append new article
-            new_retry = {"url": url, "reason": reason}
-            existing_data.append(new_retry)
-
-            # Write back to file
-            with open(self.retry_file, "w", encoding="utf-8") as f:
-                json.dump(existing_data, f, indent=2, ensure_ascii=False)
-
-            print(
-                f"{Fore.RED}✗ Saved retry URL ({len(existing_data)} total retries){Style.RESET_ALL}"
-            )
-
-        except Exception as e:
-            print(f"Error appending to JSON: {e}")
 
 
 async def main():
