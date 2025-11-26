@@ -7,12 +7,14 @@ import traceback
 
 
 class PolitifactScraper(BaseScraper):
-    def __init__(self, start_page: int = 92):
+    def __init__(self, start_page: int = 660):
         super().__init__(
             output_filename="politifact-factcheck",
             retry_filename="politifact-factcheck-retry",
         )
         self.start_page = start_page
+        self.restart_interval = 2  # In pages
+        self.log_clear_interval = 1  # In pages
 
     async def process(self) -> None:
         await self.start()
@@ -31,26 +33,26 @@ class PolitifactScraper(BaseScraper):
                     )
                     await self.restart()
 
-                print(f"Navigating to page {curr_page}")
+                # print(f"Navigating to page {curr_page}")
                 await self.navigate_with_retry(
                     f"https://www.politifact.com/factchecks/list/?page={curr_page}"
                 )
 
-                print("Locating article contents")
+                # print("Locating article contents")
                 articles = await self.locate_articles()
 
                 if len(articles) == 0:
                     print("No more articles found - scraping complete")
                     break
 
-                print("Extracting URLs from articles")
+                # print("Extracting URLs from articles")
                 urls = await self.extract_urls(articles)
 
                 if len(urls) == 0:
                     print("No URLs extracted - may have reached the end")
                     break
 
-                print("Scraping through article URLs")
+                # print("Scraping through article URLs")
                 for url in urls:
                     article_data = await self.extract_data_from_url(url)
 
@@ -61,9 +63,10 @@ class PolitifactScraper(BaseScraper):
 
                     await self.append_to_json(article_data_dict)
 
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)
 
                 curr_page += 1
+                await self.clear_logs_and_gc()
 
         except Exception as e:
             print(traceback.format_exc())
@@ -89,7 +92,9 @@ class PolitifactScraper(BaseScraper):
 
     async def extract_title(self, throw_error=True) -> str:
         return (
-            await self.page.locator("div.m-statement__quote").nth(1).inner_text()
+            await self.page.locator(
+                '//*[@id="top"]/main/section[3]/div/article/div[2]/div/div[1]/div'
+            ).inner_text()
         ).strip()
 
     async def extract_publish_date(self, throw_error=True) -> str:

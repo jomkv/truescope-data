@@ -3,6 +3,8 @@ import json
 import os
 import asyncio
 import pathlib
+import gc
+from datetime import datetime
 from colorama import Fore, Style, init
 
 init(autoreset=True)
@@ -122,3 +124,23 @@ class BaseScraper:
                     await asyncio.sleep(retry_delay)  # Wait before retry
                 continue
         return False
+
+    async def clear_logs_and_gc(self):
+        """Clear console logs and force garbage collection"""
+        try:
+            # Clear console
+            os.system("cls" if os.name == "nt" else "clear")
+
+            # Force garbage collection
+            gc.collect()
+
+            # Clear browser console logs
+            if self.page:
+                await self.page.evaluate("console.clear()")
+
+            print(
+                f"🧹 Logs cleared and garbage collected at {datetime.now().strftime('%H:%M:%S')}"
+            )
+
+        except Exception as e:
+            print(f"Error clearing logs: {e}")
