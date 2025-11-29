@@ -8,7 +8,7 @@ from datetime import datetime
 
 
 class RapplerUnifiedScraper(BaseScraper):
-    def __init__(self, start_page: int = 33):
+    def __init__(self, start_page: int = 786):
         super().__init__(
             output_filename="rappler-unified", retry_filename="rappler-unified-retry"
         )
@@ -47,9 +47,9 @@ class RapplerUnifiedScraper(BaseScraper):
 
                 urls = await self.extract_article_urls()
 
-                if len(urls) == 0:
-                    print("📄 No more articles found - scraping complete")
-                    break
+                # if len(urls) == 0:
+                #     print("📄 No more articles found - scraping complete")
+                #     break
 
                 print(f"📊 Processing {len(urls)} articles from page {curr_page}")
 
@@ -193,7 +193,7 @@ class RapplerUnifiedScraper(BaseScraper):
 
 
 async def main():
-    scraper = RapplerUnifiedScraper(start_page=1)
+    scraper = RapplerUnifiedScraper()
     await scraper.process()
 
 
