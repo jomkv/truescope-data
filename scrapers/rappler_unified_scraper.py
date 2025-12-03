@@ -8,7 +8,7 @@ from datetime import datetime
 
 
 class RapplerUnifiedScraper(BaseScraper):
-    def __init__(self, start_page: int = 786):
+    def __init__(self, start_page: int = 6572):
         super().__init__(
             output_filename="rappler-unified", retry_filename="rappler-unified-retry"
         )
@@ -65,7 +65,7 @@ class RapplerUnifiedScraper(BaseScraper):
                         f"✅ Saved: {article_data.type} - {article_data.title[:50]}..."
                     )
 
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(0.5)
 
                 curr_page += 1
 
