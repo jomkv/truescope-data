@@ -3,3 +3,5 @@
 __pycache__/
 outputs/*
 !outputs/.gitkeep
+outputs_clean/*
+!outputs_clean/.gitkeep
