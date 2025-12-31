@@ -92,7 +92,7 @@ class BaseEmbedding:
 
     def process(self):
         """Entry point of base, the only function that we call outside base"""
-        self.extract_data_from_json(self.input_file)
+        self.extract_data_from_json()
 
         embeddings: list[EmbeddedData] = []
         datas: list[ArticleData] = []
