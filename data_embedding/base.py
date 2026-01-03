@@ -5,6 +5,7 @@ from data_class.raw_data import RawData
 from data_class.article_data import ArticleData
 from data_class.embedded_data import EmbeddedData
 from sentence_transformers import SentenceTransformer
+from dataclasses import asdict
 
 
 class BaseEmbedding:
@@ -73,13 +74,16 @@ class BaseEmbedding:
 
     @staticmethod
     def generate_article_data(raw_data: RawData) -> ArticleData:
+        raw_data_dict = asdict(raw_data)
+
         return ArticleData(
-            doc_id=raw_data["doc_id"],
-            title=raw_data["title"],
-            content=raw_data["content"],
-            verdict=raw_data["verdict"],
-            publish_date=raw_data["publish_date"],
-            url=raw_data["url"],
+            doc_id=raw_data_dict.get("doc_id"),
+            title=raw_data_dict.get("title"),
+            content=raw_data_dict.get("content"),
+            claim=raw_data_dict.get("claim", None),
+            verdict=raw_data_dict.get("verdict", None),
+            publish_date=raw_data_dict.get("publish_date"),
+            url=raw_data_dict.get("url"),
         )
 
     def extract_data_from_json(self) -> list[RawData]:

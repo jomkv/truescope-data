@@ -6,6 +6,7 @@ class ArticleData:
     doc_id: str
     title: str
     content: str
-    verdict: str
+    claim: str | None
+    verdict: str | None
     publish_date: str
     url: str
