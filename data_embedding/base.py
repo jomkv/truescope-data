@@ -53,19 +53,20 @@ class BaseEmbedding:
 
         return chunks
 
-    def generate_embedding(self, raw_data: RawData) -> list[EmbeddedData]:
-        contents = self.chunk_text(raw_data["content"])
+    def generate_article_vector(self, raw_data: RawData) -> list[EmbeddedData]:
+        raw_data_dict = asdict(raw_data)
+        contents = self.chunk_text(raw_data_dict.get("content"))
         content_embeddings = self.model.encode(contents)
         embedded_datas: list[EmbeddedData] = []
 
         for idx, content_embedding in enumerate(content_embeddings):
             embedded_data = EmbeddedData(
-                chunk_id=f"{raw_data['doc_id']}_{idx}",
-                doc_id=raw_data["doc_id"],
+                chunk_id=f"{raw_data_dict.get('doc_id')}_{idx}",
+                doc_id=raw_data_dict.get("doc_id"),
                 embedding=content_embedding,
-                source=raw_data["source"],
-                type=raw_data["type"],
-                source_bias=raw_data["source_bias"],
+                source=raw_data_dict.get("source"),
+                type=raw_data_dict.get("type"),
+                source_bias=raw_data_dict.get("source_bias"),
             )
 
             embedded_datas.append(embedded_data)
@@ -73,7 +74,7 @@ class BaseEmbedding:
         return embedded_datas
 
     @staticmethod
-    def generate_article_data(raw_data: RawData) -> ArticleData:
+    def generate_article(raw_data: RawData) -> ArticleData:
         raw_data_dict = asdict(raw_data)
 
         return ArticleData(
@@ -94,15 +95,23 @@ class BaseEmbedding:
                 except json.JSONDecodeError as e:
                     raise e
 
-    def process(self):
+    def extract(self) -> tuple[list[dict], list[dict]]:
         """Entry point of base, the only function that we call outside base"""
         self.extract_data_from_json()
 
-        embeddings: list[EmbeddedData] = []
-        datas: list[ArticleData] = []
+        article_vectors: list[EmbeddedData] = []
+        articles: list[ArticleData] = []
 
         for raw_data in self.raw_datas:
-            embeddings += self.generate_embedding(raw_data)
-            datas.append(self.generate_article_data(raw_data))
+            raw_data = RawData(**raw_data)
 
+            article_vectors += self.generate_article_vector(raw_data)
+            articles.append(self.generate_article(raw_data))
+
+        article_vector_dicts: list[dict] = [
+            asdict(vector) for vector in article_vectors
+        ]
+        article_dicts: list[dict] = [asdict(article) for article in articles]
+
+        return (article_vector_dicts, article_dicts)
         # TODO: save to DB? or save as file? idk mane

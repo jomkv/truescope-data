@@ -19,3 +19,4 @@ class RawData:
     claim: Optional[str] = None
     verdict: Optional[str] = None
     authors: List[str] = field(default_factory=list)
+    doc_id: Optional[str] = None
