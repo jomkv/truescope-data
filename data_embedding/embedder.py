@@ -1,9 +1,9 @@
 from data_embedding.base import BaseEmbedding
-from sqlalchemy.sql import func
 import hashlib
 from pathlib import Path
 from core.db import Session
 from sqlalchemy import insert, text
+from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from schemas.article_schema import Article
 from schemas.article_chunks_schema import ArticleChunks
@@ -35,12 +35,6 @@ class PolitifactFactcheckEmbedding(BaseEmbedding):
                     "embedding": None  # Will be generated based on claim_text
                 })
 
-        # Drop duplicate claims per doc_id/claim_text combination before encoding
-        orig_claim_count = len(claims_dicts)
-        claims_dicts = list({(c["doc_id"], c["claim_text"].strip()): c for c in claims_dicts}.values())
-        if len(claims_dicts) != orig_claim_count:
-            print(f"  Deduped claims: {orig_claim_count - len(claims_dicts)} removed")
-
         # Restrict payloads to model columns to avoid passing extraneous keys
         vector_allowed_keys = {"chunk_id", "doc_id", "chunk_content", "embedding"}
         article_allowed_keys = {"doc_id", "title", "content", "publish_date", "url", "source", "type", "source_bias"}
@@ -56,7 +50,7 @@ class PolitifactFactcheckEmbedding(BaseEmbedding):
         for art in article_dicts:
             bias = art.get("source_bias")
             if bias is None or (isinstance(bias, str) and not bias.strip()):
-                art["source_bias"] = "NEUTRAL"
+                art["source_bias"] = "UNKNOWN"
 
         # Drop duplicate keys within this run to avoid hitting the same doc_id/chunk_id twice per batch
         orig_article_count = len(article_dicts)
