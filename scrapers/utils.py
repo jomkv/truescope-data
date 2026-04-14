@@ -1,18 +1,16 @@
 import time
 import asyncio
 from typing import Callable, Any
+from datetime import date, timedelta
 from data_embedding.embedder import Embedding
 
-# Standard date limit
-DATE_LIMIT = "2026-03-28"
 
 # Global scraper limits (can be updated at runtime in run_all.py)
 MAX_PAGES = 10
 MAX_CONSECUTIVE_OLD = 5
 MAX_CONSECUTIVE_NO_NEW_LINKS = 10
-DATE_LIMIT_DAYS = 18
-
-# Shared Global Embedder (singleton to avoid reloading weights)
+DATE_LIMIT_DAYS = 3
+DATE_LIMIT = date.today() - timedelta(days=DATE_LIMIT_DAYS)
 EMBEDDER = Embedding(input_file="")
 
 

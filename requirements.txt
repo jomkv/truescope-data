@@ -70,3 +70,5 @@ urllib3==2.6.1
 wcwidth==0.2.14
 widgetsnbextension==4.0.15
 sentencepiece
+fastapi
+uvicorn
