@@ -54,22 +54,10 @@ async def scraper_task_wrapper(name, func, semaphore):
 
 
 async def main():
-    # 1. Calculate dynamic date limit (Today - 3 days DEFAULT in utils)
-    limit_date_dt = datetime.now() - timedelta(days=utils.DATE_LIMIT_DAYS)
-    limit_date_str = limit_date_dt.strftime("%Y-%m-%d")
-
-    # Global Configuration Control Center
-    utils.DATE_LIMIT = limit_date_str
-    utils.MAX_PAGES = 10  # Maximum pagination deepness
-    utils.MAX_CONSECUTIVE_OLD = (
-        5  # Stop after X consecutive articles older than DATE_LIMIT
-    )
-
     print(f"==================================================")
-    print(f"   TRUESCOPE MULTI-SCRAPER RUNNER (PARALLEL)     ")
+    print(f"   TRUESCOPE MULTI-SCRAPER RUNNER (SEQUENTIAL)   ")
     print(f"==================================================")
-    print(f"Target Concurrency: 2 Scrapers")
-    print(f"Dynamic Date Limit: {limit_date_str}")
+    print(f"Dynamic Date Limit: {utils.DATE_LIMIT}")
     print(f"Max Pagination:    {utils.MAX_PAGES} pages")
     print(f"==================================================\n")
 
