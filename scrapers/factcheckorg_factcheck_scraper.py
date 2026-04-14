@@ -4,6 +4,23 @@ from data_class.raw_data import RawData
 from dataclasses import asdict
 import asyncio
 import traceback
+from data_cleaning.factcheckorgCleaner import clean_article as FactCheckCleaner
+from data_embedding.embedder import Embedding
+from .utils import (
+    save_article_async,
+    get_existing_articles_urls,
+    DATE_LIMIT,
+    MAX_PAGES as UTILS_MAX_PAGES,
+    MAX_CONSECUTIVE_OLD,
+    MAX_CONSECUTIVE_NO_NEW_LINKS,
+)
+
+# Initialize embedder once to reuse the model
+EMBEDDER = Embedding(input_file="")
+
+
+async def save_article(article: dict):
+    return await save_article_async(article, FactCheckCleaner, EMBEDDER)
 
 
 class FactcheckorgScraper(BaseScraper):
@@ -21,6 +38,12 @@ class FactcheckorgScraper(BaseScraper):
 
         # Track page
         curr_page: int = self.start_page
+        consecutive_too_old = 0
+        consecutive_no_new_links = 0
+
+        #  Fetch existing URLs from the database once per run
+        existing_urls = get_existing_articles_urls(EMBEDDER, source="FACTCHECKORG")
+        print(f"Loaded {len(existing_urls)} existing articles to skip duplicates.")
 
         try:
             while True:
@@ -33,27 +56,39 @@ class FactcheckorgScraper(BaseScraper):
                     )
                     await self.restart()
 
-                # print(f"Navigating to page {curr_page}")
+                print(f"\n--- Navigating to FactCheck.org page {curr_page} ---")
                 await self.navigate_with_retry(
                     f"https://www.factcheck.org/the-factcheck-wire/page/{curr_page}"
                 )
 
-                # print("Locating article contents")
+                print("Locating article contents")
                 articles = await self.locate_articles()
 
                 if len(articles) == 0:
                     print("No more articles found - scraping complete")
                     break
 
-                # print("Extracting URLs from articles")
+                print("Extracting URLs from articles")
                 urls = await self.extract_urls(articles)
 
                 if len(urls) == 0:
                     print("No URLs extracted - may have reached the end")
                     break
 
-                # print("Scraping through article URLs")
-                for url in urls:
+                # Check for new links vs already in database
+                new_links_on_page = [url for url in urls if url not in existing_urls]
+                
+                if not new_links_on_page:
+                    consecutive_no_new_links += 1
+                    print(f"No new links found on page {curr_page} ({consecutive_no_new_links}/{MAX_CONSECUTIVE_NO_NEW_LINKS})")
+                    if consecutive_no_new_links >= MAX_CONSECUTIVE_NO_NEW_LINKS:
+                        print(f" Stopping: {consecutive_no_new_links} consecutive pages with no new links.")
+                        break
+                else:
+                    consecutive_no_new_links = 0
+
+                print(f"Processing {len(new_links_on_page)} new URLs")
+                for url in new_links_on_page:
                     article_data = await self.extract_data_from_url(url)
 
                     if article_data == None:
@@ -61,7 +96,20 @@ class FactcheckorgScraper(BaseScraper):
 
                     article_data_dict = asdict(article_data)
 
-                    await self.append_to_json(article_data_dict)
+                    # Real-time cleaning and saving to database
+                    # save_article returns False only if skipped due to age
+                    is_recent = await save_article(article_data_dict)
+
+                    if not is_recent:
+                        consecutive_too_old += 1
+                        if consecutive_too_old >= MAX_CONSECUTIVE_OLD:
+                            print(
+                                f" Stop requested: {consecutive_too_old} consecutive articles are too old (before {DATE_LIMIT})."
+                            )
+                            await self.quit()
+                            return
+                    else:
+                        consecutive_too_old = 0  # Reset on any valid found article
 
                     await asyncio.sleep(0.5)
 
@@ -109,18 +157,6 @@ class FactcheckorgScraper(BaseScraper):
 
         return "\n\n".join(filtered_content)
 
-    async def extract_authors(self, throw_error=True) -> list[str]:
-        try:
-            author_elements = await self.page.locator("p.byline > a").all()
-            authors = []
-
-            for author_el in author_elements:
-                authors.append(await author_el.inner_text())
-
-            return authors
-        except Exception as e:
-            return []
-
     async def extract_data_from_url(self, url: str) -> RawData | int:
         print(f"Scraping {url}")
 
@@ -151,6 +187,18 @@ class FactcheckorgScraper(BaseScraper):
         )
 
         return article_data
+
+    async def extract_authors(self, throw_error=True) -> list[str]:
+        try:
+            author_elements = await self.page.locator("p.byline > a").all()
+            authors = []
+
+            for author_el in author_elements:
+                authors.append(await author_el.inner_text())
+
+            return authors
+        except Exception as e:
+            return []
 
 
 async def main():

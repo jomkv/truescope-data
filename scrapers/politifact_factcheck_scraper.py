@@ -1,13 +1,29 @@
+import asyncio
+import traceback
 from .base import BaseScraper
 from playwright.async_api import Locator
 from data_class.raw_data import RawData
 from dataclasses import asdict
-import asyncio
-import traceback
+from data_cleaning.politifactCleaner import clean_article as PolitifactCleaner
+from .utils import (
+    save_article_async,
+    get_existing_articles_urls,
+    DATE_LIMIT,
+    MAX_PAGES,
+    MAX_CONSECUTIVE_OLD,
+    MAX_CONSECUTIVE_NO_NEW_LINKS,
+    EMBEDDER,
+)
+
+# Using shared EMBEDDER from utils
+
+
+async def save_article(article: dict):
+    return await save_article_async(article, PolitifactCleaner, EMBEDDER)
 
 
 class PolitifactScraper(BaseScraper):
-    def __init__(self, start_page: int = 660):
+    def __init__(self, start_page: int = 1):
         super().__init__(
             output_filename="politifact-factcheck",
             retry_filename="politifact-factcheck-retry",
@@ -21,6 +37,12 @@ class PolitifactScraper(BaseScraper):
 
         # Track page
         curr_page: int = self.start_page
+        consecutive_too_old = 0
+        consecutive_no_new_links = 0
+
+        #  Fetch existing URLs from the database once per run
+        existing_urls = get_existing_articles_urls(EMBEDDER, source="POLITIFACT")
+        print(f"Loaded {len(existing_urls)} existing articles to skip duplicates.")
 
         try:
             while True:
@@ -52,8 +74,24 @@ class PolitifactScraper(BaseScraper):
                     print("No URLs extracted - may have reached the end")
                     break
 
-                # print("Scraping through article URLs")
-                for url in urls:
+                # Check for new links vs already in database
+                new_links_on_page = [url for url in urls if url not in existing_urls]
+
+                if not new_links_on_page:
+                    consecutive_no_new_links += 1
+                    print(
+                        f"No new links found on page {curr_page} ({consecutive_no_new_links}/{MAX_CONSECUTIVE_NO_NEW_LINKS})"
+                    )
+                    if consecutive_no_new_links >= MAX_CONSECUTIVE_NO_NEW_LINKS:
+                        print(
+                            f"Stopping: {consecutive_no_new_links} consecutive pages with no new links."
+                        )
+                        break
+                else:
+                    consecutive_no_new_links = 0
+
+                print(f"Processing {len(new_links_on_page)} new URLs")
+                for url in new_links_on_page:
                     article_data = await self.extract_data_from_url(url)
 
                     if article_data == None:
@@ -61,7 +99,20 @@ class PolitifactScraper(BaseScraper):
 
                     article_data_dict = asdict(article_data)
 
-                    await self.append_to_json(article_data_dict)
+                    # Real-time cleaning and saving to database
+                    # save_article returns False only if skipped due to age
+                    is_recent = await save_article(article_data_dict)
+
+                    if not is_recent:
+                        consecutive_too_old += 1
+                        if consecutive_too_old >= MAX_CONSECUTIVE_OLD:
+                            print(
+                                f"Stop requested: {consecutive_too_old} consecutive articles are too old (before {DATE_LIMIT})."
+                            )
+                            await self.quit()
+                            return
+                    else:
+                        consecutive_too_old = 0  # Reset on any valid found article
 
                     await asyncio.sleep(1)
 
@@ -143,12 +194,12 @@ class PolitifactScraper(BaseScraper):
             content=content,
             publish_date=publish_date,
             url=url,
-            source="politifact",
-            type="fact-check",
+            source="POLITIFACT",
+            type="FACT-CHECK" if verdict else "FACT-CHECK-NO-VERDICT",
             source_bias=None,
             claim=claim,
             verdict=verdict,
-            authors=[],
+            author=[],
         )
 
         return article_data

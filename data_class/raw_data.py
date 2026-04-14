@@ -15,8 +15,18 @@ class RawData:
     url: str
     source: str
     type: str
+    author: List[str] = field(default_factory=list)
+    authors: List[str] = field(default_factory=list)
     source_bias: Optional[str] = None
     claim: Optional[str] = None
     verdict: Optional[str] = None
-    authors: List[str] = field(default_factory=list)
     doc_id: Optional[str] = None
+
+    # Use 'authors' as the main field, but allow 'author' as an alias for backward compatibility
+    @property
+    def author(self):
+        return self.authors
+
+    @author.setter
+    def author(self, value):
+        self.authors = value

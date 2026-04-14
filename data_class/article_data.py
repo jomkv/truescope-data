@@ -12,4 +12,5 @@ class ArticleData:
     url: str
     source: str
     type: str
+    author: list[str] | None = None
     source_bias: str | None = None

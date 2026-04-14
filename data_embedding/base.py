@@ -15,7 +15,12 @@ class BaseEmbedding:
     def __init__(
         self,
         input_file: Path | str,
-        model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        model: str = str(
+            Path(__file__).resolve().parent.parent
+            / "fine-tuned-model"
+            / "embeddings"
+            / "v2"
+        ),
     ):
         self.raw_datas: list[RawData] = []
         self.model = SentenceTransformer(model)
@@ -30,7 +35,7 @@ class BaseEmbedding:
         # Handle None or empty text
         if not text:
             return []
-        
+
         paragraphs: list[str] = [
             p.strip() for p in text.split("\n") if len(p.strip()) > 0
         ]
@@ -62,22 +67,26 @@ class BaseEmbedding:
 
     def generate_article_vector(self, raw_data: RawData) -> list[EmbeddedData]:
         raw_data_dict = asdict(raw_data)
-        
+
         # Generate doc_id if it's missing
         doc_id = raw_data_dict.get("doc_id")
         if not doc_id:
             doc_id = generate_doc_id(raw_data_dict.get("url"))
-        
+
         contents = self.chunk_text(raw_data_dict.get("content"))
-        
+
         # Skip if no content to chunk
         if not contents:
             return []
-        
-        content_embeddings = self.model.encode(contents)
+
+        # E5 models required 'passage: ' prefix, but MiniLM does not
+        prefixed_contents = contents
+        content_embeddings = self.model.encode(prefixed_contents)
         embedded_datas: list[EmbeddedData] = []
 
-        for idx, (content, content_embedding) in enumerate(zip(contents, content_embeddings)):
+        for idx, (content, content_embedding) in enumerate(
+            zip(contents, content_embeddings)
+        ):
             embedded_data = EmbeddedData(
                 chunk_id=f"{doc_id}_{idx}",
                 doc_id=doc_id,
@@ -95,7 +104,7 @@ class BaseEmbedding:
     @staticmethod
     def generate_article(raw_data: RawData) -> ArticleData:
         raw_data_dict = asdict(raw_data)
-        
+
         # Generate doc_id if it's missing
         doc_id = raw_data_dict.get("doc_id")
         if not doc_id:
@@ -105,7 +114,9 @@ class BaseEmbedding:
         publish_date = raw_data_dict.get("publish_date")
         if isinstance(publish_date, str) and publish_date:
             try:
-                publish_date_dt = datetime.fromisoformat(publish_date.replace("Z", "+00:00"))
+                publish_date_dt = datetime.fromisoformat(
+                    publish_date.replace("Z", "+00:00")
+                )
             except ValueError:
                 # Fallback: leave as original if parsing fails
                 publish_date_dt = publish_date
@@ -122,6 +133,7 @@ class BaseEmbedding:
             url=raw_data_dict.get("url"),
             source=raw_data_dict.get("source"),
             type=raw_data_dict.get("type"),
+            author=raw_data_dict.get("author", None),
             source_bias=raw_data_dict.get("source_bias"),
         )
 
@@ -133,16 +145,21 @@ class BaseEmbedding:
                 except json.JSONDecodeError as e:
                     raise e
 
-    def extract(self) -> tuple[list[dict], list[dict]]:
-        """Entry point of base, the only function that we call outside base"""
-        self.extract_data_from_json()
+    def extract_from_data(
+        self, raw_datas: list[dict], start_idx: int = None, end_idx: int = None
+    ) -> tuple[list[dict], list[dict]]:
+        """Extract article data and vectors from a list of dictionaries."""
+        if start_idx is not None or end_idx is not None:
+            raw_datas = raw_datas[start_idx:end_idx]
 
         article_vectors: list[EmbeddedData] = []
         articles: list[ArticleData] = []
 
-        print(f"\nProcessing {len(self.raw_datas)} articles...")
-        for raw_data in tqdm(self.raw_datas, desc="Generating embeddings", unit="article"):
-            raw_data = RawData(**raw_data)
+        print(f"\nProcessing {len(raw_datas)} articles...")
+        for raw_data_dict in tqdm(
+            raw_datas, desc="Generating embeddings", unit="article"
+        ):
+            raw_data = RawData(**raw_data_dict)
 
             # Skip articles with no content or publish_date
             if not raw_data.content or not raw_data.publish_date:
@@ -151,11 +168,22 @@ class BaseEmbedding:
             article_vectors += self.generate_article_vector(raw_data)
             articles.append(self.generate_article(raw_data))
 
-        print(f"\nConverting {len(articles)} articles and {len(article_vectors)} vectors to dictionaries...")
+        print(
+            f"\nConverting {len(articles)} articles and {len(article_vectors)} vectors to dictionaries..."
+        )
         article_vector_dicts: list[dict] = [
             asdict(vector) for vector in article_vectors
         ]
         article_dicts: list[dict] = [asdict(article) for article in articles]
 
         return (article_vector_dicts, article_dicts)
+
+    def extract(
+        self, start_idx: int = None, end_idx: int = None
+    ) -> tuple[list[dict], list[dict]]:
+        """Entry point of base, the only function that we call outside base"""
+        self.extract_data_from_json()
+        return self.extract_from_data(
+            self.raw_datas, start_idx=start_idx, end_idx=end_idx
+        )
         # TODO: save to DB? or save as file? idk mane

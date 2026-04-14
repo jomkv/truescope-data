@@ -20,6 +20,25 @@ init(autoreset=True)
 
 
 class BaseScraper:
+    async def append_many_to_json(self, articles: list[dict]) -> None:
+        try:
+            os.makedirs(os.path.dirname(self.output_file), exist_ok=True)
+            existing_data = []
+            if os.path.exists(self.output_file):
+                with open(self.output_file, "r", encoding="utf-8") as f:
+                    try:
+                        existing_data = json.load(f)
+                    except json.JSONDecodeError:
+                        existing_data = []
+            existing_data.extend(articles)
+            with open(self.output_file, "w", encoding="utf-8") as f:
+                json.dump(existing_data, f, indent=2, ensure_ascii=False)
+            print(
+                f"{Fore.GREEN}Saved {len(articles)} articles in batch ({len(existing_data)} total articles){Style.RESET_ALL}"
+            )
+        except Exception as e:
+            print(f"Error appending many to JSON: {e}")
+
     def __init__(
         self,
         headless=True,
@@ -90,7 +109,7 @@ class BaseScraper:
                 json.dump(existing_data, f, indent=2, ensure_ascii=False)
 
             print(
-                f"{Fore.GREEN}✓ Saved article ({len(existing_data)} total articles){Style.RESET_ALL}"
+                f"{Fore.GREEN}Saved article ({len(existing_data)} total articles){Style.RESET_ALL}"
             )
 
         except Exception as e:
@@ -119,7 +138,7 @@ class BaseScraper:
                 json.dump(existing_data, f, indent=2, ensure_ascii=False)
 
             print(
-                f"{Fore.RED}✗ Saved retry URL ({len(existing_data)} total retries){Style.RESET_ALL}"
+                f"{Fore.RED}Saved retry URL ({len(existing_data)} total retries){Style.RESET_ALL}"
             )
 
         except Exception as e:
@@ -161,7 +180,7 @@ class BaseScraper:
                 await self.page.evaluate("console.clear()")
 
             print(
-                f"🧹 Logs cleared and garbage collected at {datetime.now().strftime('%H:%M:%S')}"
+                f"Logs cleared and garbage collected at {datetime.now().strftime('%H:%M:%S')}"
             )
 
         except Exception as e:
