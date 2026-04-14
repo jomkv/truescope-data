@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from data_embedding.embedder import Embedding
 
 
-# Global scraper limits (can be updated at runtime in run_all.py)
+# Global scraper limits (Single Source of Truth)
 MAX_PAGES = 10
 MAX_CONSECUTIVE_OLD = 5
 MAX_CONSECUTIVE_NO_NEW_LINKS = 10
