@@ -33,7 +33,7 @@ async def scraper_task_wrapper(name, func, semaphore):
     """
     async with semaphore:
         start_time = datetime.now()
-        print(f"\n[ {start_time.strftime('%H:%M:%S')} ] 🚀 STARTING: {name}")
+        print(f"\n[ {start_time.strftime('%H:%M:%S')} ] STARTING: {name}")
         print(f"──────────────────────────────────────────────────")
 
         try:
@@ -41,21 +41,35 @@ async def scraper_task_wrapper(name, func, semaphore):
                 await func()
             else:
                 await run_sync_scraper(func)
-            
+
             end_time = datetime.now()
             duration = end_time - start_time
-            print(f"\n[ {end_time.strftime('%H:%M:%S')} ] ✅ FINISHED: {name} (Duration: {duration})")
+            print(
+                f"\n[ {end_time.strftime('%H:%M:%S')} ] FINISHED: {name} (Duration: {duration})"
+            )
 
         except Exception as e:
-            print(f"\n[ {datetime.now().strftime('%H:%M:%S')} ] ❌ ERROR in '{name}': {e}")
+            print(f"\n[ {datetime.now().strftime('%H:%M:%S')} ] ERROR in '{name}': {e}")
             print(f"Skipping to next available scraper...")
 
 
 async def main():
+    # 1. Calculate dynamic date limit (Today - 3 days DEFAULT in utils)
+    limit_date_dt = datetime.now() - timedelta(days=utils.DATE_LIMIT_DAYS)
+    limit_date_str = limit_date_dt.strftime("%Y-%m-%d")
+
+    # Global Configuration Control Center
+    utils.DATE_LIMIT = limit_date_str
+    utils.MAX_PAGES = 10  # Maximum pagination deepness
+    utils.MAX_CONSECUTIVE_OLD = (
+        5  # Stop after X consecutive articles older than DATE_LIMIT
+    )
+
     print(f"==================================================")
-    print(f"   TRUESCOPE MULTI-SCRAPER RUNNER (SEQUENTIAL)   ")
+    print(f"   TRUESCOPE MULTI-SCRAPER RUNNER (PARALLEL)     ")
     print(f"==================================================")
-    print(f"Dynamic Date Limit: {utils.DATE_LIMIT}")
+    print(f"Target Concurrency: 2 Scrapers")
+    print(f"Dynamic Date Limit: {limit_date_str}")
     print(f"Max Pagination:    {utils.MAX_PAGES} pages")
     print(f"==================================================\n")
 
@@ -77,10 +91,10 @@ async def main():
 
     # limit to 1 concurrent scraper for maximum stability
     semaphore = asyncio.Semaphore(1)
-    
+
     # Create tasks for all scrapers
     tasks = [scraper_task_wrapper(name, func, semaphore) for name, func in scrapers]
-    
+
     # Run all tasks (semaphore will ensure only 2 run at a time)
     await asyncio.gather(*tasks)
 
