@@ -49,10 +49,10 @@ STATUS=${PIPESTATUS[0]}
 
 if [ $STATUS -eq 0 ]; then
     echo "--------------------------------------------------" | tee -a "$LOG_FILE"
-    echo "✅ Scraper run completed successfully at $(date)" | tee -a "$LOG_FILE"
+    echo "Scraper run completed successfully at $(date)" | tee -a "$LOG_FILE"
 else
     echo "--------------------------------------------------" | tee -a "$LOG_FILE"
-    echo "❌ Scraper run failed with exit code $STATUS at $(date)" | tee -a "$LOG_FILE"
+    echo "Scraper run failed with exit code $STATUS at $(date)" | tee -a "$LOG_FILE"
 fi
 
 # Cleanup: Deactivate venv

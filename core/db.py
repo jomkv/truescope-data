@@ -4,13 +4,15 @@ from core.config import DATABASE_URI, CA_CERT_PATH
 from core.base import Base
 import os
 
-# Configure SQLAlchemy engine with specific SSL parameters for DigitalOcean
+# Configure SQLAlchemy engine with specific SSL parameters for Production
 connect_args = {}
-if "postgresql" in DATABASE_URI:
+if "postgresql" in DATABASE_URI and CA_CERT_PATH:
     connect_args["sslmode"] = "require"
-    # Use the CA certificate if it exists in the root
+    # Use the CA certificate if it exists
     if os.path.exists(CA_CERT_PATH):
         connect_args["sslrootcert"] = CA_CERT_PATH
+    else:
+        print(f"Warning: CA_CERT_PATH {CA_CERT_PATH} not found. DB connection might fail.")
 
 engine = create_engine(
     DATABASE_URI,
