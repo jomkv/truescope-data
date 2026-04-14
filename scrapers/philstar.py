@@ -323,8 +323,7 @@ def collect_and_scrape_listing(listing_url, max_scrolls=200):
                 except Exception:
                     pass
                 
-                # Clear console and force garbage collection
-                os.system("cls" if os.name == "nt" else "clear")
+                # Force garbage collection
                 gc.collect()
                 print(f"Memory cleared and garbage collected at {datetime.now().strftime('%H:%M:%S')}")
                 

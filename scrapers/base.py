@@ -167,11 +167,8 @@ class BaseScraper:
         return False
 
     async def clear_logs_and_gc(self):
-        """Clear console logs and force garbage collection"""
+        """Force garbage collection periodically"""
         try:
-            # Clear console
-            os.system("cls" if os.name == "nt" else "clear")
-
             # Force garbage collection
             gc.collect()
 
@@ -180,7 +177,7 @@ class BaseScraper:
                 await self.page.evaluate("console.clear()")
 
             print(
-                f"Logs cleared and garbage collected at {datetime.now().strftime('%H:%M:%S')}"
+                f"Memory cleared and garbage collected at {datetime.now().strftime('%H:%M:%S')}"
             )
 
         except Exception as e:

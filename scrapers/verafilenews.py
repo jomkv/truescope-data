@@ -4,6 +4,7 @@ import asyncio
 import sys
 import gc
 import os
+import random
 from pathlib import Path
 from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
@@ -23,7 +24,7 @@ from .utils import (
     save_article_sync,
     get_existing_articles_urls,
     DATE_LIMIT,
-    MAX_PAGES as UTILS_MAX_PAGES,
+    MAX_PAGES,
     MAX_CONSECUTIVE_OLD,
     MAX_CONSECUTIVE_NO_NEW_LINKS,
     EMBEDDER,
@@ -328,8 +329,7 @@ def run_scraper(listing_url: str):
                 except Exception:
                     pass
                 
-                # Clear console and force garbage collection
-                os.system("cls" if os.name == "nt" else "clear")
+                # Force garbage collection
                 gc.collect()
                 print(f"Memory cleared and garbage collected at {datetime.now().strftime('%H:%M:%S')}")
                 

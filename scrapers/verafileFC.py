@@ -16,7 +16,7 @@ import gc
 import os
 from data_cleaning.veraFilesFCCleaner import clean_article as VeraCleaner
 from .utils import (
-    save_article_async,
+    save_article_sync,
     get_existing_articles_urls,
     DATE_LIMIT,
     MAX_PAGES as UTILS_MAX_PAGES,
@@ -462,8 +462,7 @@ def run_scraper(listing_url: str):
                 except Exception:
                     pass
                 
-                # Clear console and force garbage collection
-                os.system("cls" if os.name == "nt" else "clear")
+                # Force garbage collection
                 gc.collect()
                 print(f"Memory cleared and garbage collected at {datetime.now().strftime('%H:%M:%S')}")
                 

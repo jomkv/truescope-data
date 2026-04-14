@@ -10,7 +10,7 @@ MAX_PAGES = 10
 MAX_CONSECUTIVE_OLD = 5
 MAX_CONSECUTIVE_NO_NEW_LINKS = 10
 DATE_LIMIT_DAYS = 3
-DATE_LIMIT = date.today() - timedelta(days=DATE_LIMIT_DAYS)
+DATE_LIMIT = (date.today() - timedelta(days=DATE_LIMIT_DAYS)).isoformat()
 EMBEDDER = Embedding(input_file="")
 
 

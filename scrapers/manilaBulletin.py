@@ -466,8 +466,7 @@ def collect_and_scrape_listing(listing_url, max_pages=10):
                     except Exception:
                         pass
                     
-                    # Clear console and force garbage collection
-                    os.system("cls" if os.name == "nt" else "clear")
+                    # Force garbage collection
                     gc.collect()
                     print(f"Memory cleared and garbage collected at {time.strftime('%H:%M:%S')}")
                     
@@ -596,8 +595,7 @@ def collect_and_scrape_listing(listing_url, max_pages=10):
                     except Exception:
                         pass
                     
-                    # Clear console and force garbage collection
-                    os.system("cls" if os.name == "nt" else "clear")
+                    # Force garbage collection
                     gc.collect()
                     print(f"Memory cleared and garbage collected at {time.strftime('%H:%M:%S')}")
                     

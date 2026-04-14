@@ -7,7 +7,6 @@ from . import utils
 from .politifact_factcheck_scraper import main as politifact_scraper
 from .verafileFC import main as verafile_fc_scraper
 from .snopesfc import main as snopes_fc_scraper
-from .fullfact_factcheck_scraper import main as fullfact_scraper
 from .rappler_factcheck_scraper import main as rappler_scraper
 from .gma import main as gma_scraper
 
@@ -28,29 +27,53 @@ async def run_sync_scraper(func, *args):
         await loop.run_in_executor(pool, func, *args)
 
 
+async def scraper_task_wrapper(name, func, semaphore):
+    """
+    Wrapper to run a scraper with a concurrency limit.
+    """
+    async with semaphore:
+        start_time = datetime.now()
+        print(f"\n[ {start_time.strftime('%H:%M:%S')} ] 🚀 STARTING: {name}")
+        print(f"──────────────────────────────────────────────────")
+
+        try:
+            if asyncio.iscoroutinefunction(func):
+                await func()
+            else:
+                await run_sync_scraper(func)
+            
+            end_time = datetime.now()
+            duration = end_time - start_time
+            print(f"\n[ {end_time.strftime('%H:%M:%S')} ] ✅ FINISHED: {name} (Duration: {duration})")
+
+        except Exception as e:
+            print(f"\n[ {datetime.now().strftime('%H:%M:%S')} ] ❌ ERROR in '{name}': {e}")
+            print(f"Skipping to next available scraper...")
+
+
 async def main():
-    # 1. Calculate dynamic date limit (Today - 7 days)
+    # 1. Calculate dynamic date limit (Today - 3 days DEFAULT in utils)
     limit_date_dt = datetime.now() - timedelta(days=utils.DATE_LIMIT_DAYS)
     limit_date_str = limit_date_dt.strftime("%Y-%m-%d")
 
     # Global Configuration Control Center
     utils.DATE_LIMIT = limit_date_str
     utils.MAX_PAGES = 10  # Maximum pagination deepness
-    utils.MAX_CONSECUTIVE_OLD = (
-        5  # Stop after X consecutive articles older than DATE_LIMIT
-    )
+    utils.MAX_CONSECUTIVE_OLD = 5  # Stop after X consecutive articles older than DATE_LIMIT
 
-    print(f"Starting Scraper Sequence...")
+    print(f"==================================================")
+    print(f"   TRUESCOPE MULTI-SCRAPER RUNNER (PARALLEL)     ")
+    print(f"==================================================")
+    print(f"Target Concurrency: 2 Scrapers")
     print(f"Dynamic Date Limit: {limit_date_str}")
-    print(f"Max Pagination: {utils.MAX_PAGES} pages")
-    print(f"Stop Threshold: {utils.MAX_CONSECUTIVE_OLD} consecutive old articles")
+    print(f"Max Pagination:    {utils.MAX_PAGES} pages")
+    print(f"==================================================\n")
 
     # 2. Define the execution list
     scrapers = [
         ("Politifact", politifact_scraper),
         ("Verafiles FC", verafile_fc_scraper),
         ("Snopes FC", snopes_fc_scraper),
-        ("Full Fact", fullfact_scraper),
         ("Rappler FC", rappler_scraper),
         ("GMA", gma_scraper),
         ("Verafiles News", verafile_news_scraper),
@@ -62,30 +85,18 @@ async def main():
         ("Snopes News", snopesnews_scraper),
     ]
 
-    for name, func in scrapers:
-        print(f"\n──────────────────────────────────────────────────")
-        print(f"Executing Scraper: {name}")
-        print(f"──────────────────────────────────────────────────")
+    # limit to 1 concurrent scraper for maximum stability
+    semaphore = asyncio.Semaphore(1)
+    
+    # Create tasks for all scrapers
+    tasks = [scraper_task_wrapper(name, func, semaphore) for name, func in scrapers]
+    
+    # Run all tasks (semaphore will ensure only 2 run at a time)
+    await asyncio.gather(*tasks)
 
-        try:
-            if asyncio.iscoroutinefunction(func):
-                await func()
-            else:
-                await run_sync_scraper(func)
-            print(f"Finished: {name}")
-
-        except Exception as e:
-            print(f"Error in scraper '{name}': {e}")
-            # --- USER CHOICE: STOP ON FAILURE ---
-            # By default, we raise here to stop the whole process as requested.
-            # To continue, comment out 'raise' and uncomment 'continue'.
-            # raise e
-
-            # --- USER CHOICE: CONTINUE ON FAILURE ---
-            print(f"Skipping failed scraper '{name}' and continuing to next...")
-            continue
-
-    print("\nAll scrapers in the sequence have completed successfully!")
+    print("\n==================================================")
+    print("All scrapers have completed their cycles.")
+    print("==================================================")
 
 
 if __name__ == "__main__":

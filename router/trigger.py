@@ -12,7 +12,7 @@ if str(root_dir) not in sys.path:
     sys.path.append(str(root_dir))
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # Define the router
 router = APIRouter(
