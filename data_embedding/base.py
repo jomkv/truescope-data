@@ -6,13 +6,21 @@ from data_class.article_data import ArticleData
 from data_class.embedded_data import EmbeddedData
 from sentence_transformers import SentenceTransformer
 from dataclasses import asdict
+from data_cleaning.generate_doc_id import generate_doc_id
+from tqdm import tqdm
+from datetime import datetime, timezone
 
 
 class BaseEmbedding:
     def __init__(
         self,
         input_file: Path | str,
-        model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        model: str = str(
+            Path(__file__).resolve().parent.parent
+            / "fine-tuned-model"
+            / "embeddings"
+            / "v2"
+        ),
     ):
         self.raw_datas: list[RawData] = []
         self.model = SentenceTransformer(model)
@@ -24,6 +32,10 @@ class BaseEmbedding:
         Chunk text into paragraph-aligned chunks
         between min_words and max_words.
         """
+        # Handle None or empty text
+        if not text:
+            return []
+
         paragraphs: list[str] = [
             p.strip() for p in text.split("\n") if len(p.strip()) > 0
         ]
@@ -47,22 +59,38 @@ class BaseEmbedding:
             current_chunk.append(para)
             current_word_count += word_count
 
-        # Add remaining chunk
-        if current_word_count >= min_words:
+        # Add remaining chunk (even if below min_words to ensure short articles get vectors)
+        if current_word_count > 0:
             chunks.append(" ".join(current_chunk))
 
         return chunks
 
     def generate_article_vector(self, raw_data: RawData) -> list[EmbeddedData]:
         raw_data_dict = asdict(raw_data)
+
+        # Generate doc_id if it's missing
+        doc_id = raw_data_dict.get("doc_id")
+        if not doc_id:
+            doc_id = generate_doc_id(raw_data_dict.get("url"))
+
         contents = self.chunk_text(raw_data_dict.get("content"))
-        content_embeddings = self.model.encode(contents)
+
+        # Skip if no content to chunk
+        if not contents:
+            return []
+
+        # E5 models required 'passage: ' prefix, but MiniLM does not
+        prefixed_contents = contents
+        content_embeddings = self.model.encode(prefixed_contents)
         embedded_datas: list[EmbeddedData] = []
 
-        for idx, content_embedding in enumerate(content_embeddings):
+        for idx, (content, content_embedding) in enumerate(
+            zip(contents, content_embeddings)
+        ):
             embedded_data = EmbeddedData(
-                chunk_id=f"{raw_data_dict.get('doc_id')}_{idx}",
-                doc_id=raw_data_dict.get("doc_id"),
+                chunk_id=f"{doc_id}_{idx}",
+                doc_id=doc_id,
+                chunk_content=content,
                 embedding=content_embedding,
                 source=raw_data_dict.get("source"),
                 type=raw_data_dict.get("type"),
@@ -77,14 +105,36 @@ class BaseEmbedding:
     def generate_article(raw_data: RawData) -> ArticleData:
         raw_data_dict = asdict(raw_data)
 
+        # Generate doc_id if it's missing
+        doc_id = raw_data_dict.get("doc_id")
+        if not doc_id:
+            doc_id = generate_doc_id(raw_data_dict.get("url"))
+
+        # Parse publish_date to a Python datetime if provided as ISO string
+        publish_date = raw_data_dict.get("publish_date")
+        if isinstance(publish_date, str) and publish_date:
+            try:
+                publish_date_dt = datetime.fromisoformat(
+                    publish_date.replace("Z", "+00:00")
+                )
+            except ValueError:
+                # Fallback: leave as original if parsing fails
+                publish_date_dt = publish_date
+        else:
+            publish_date_dt = publish_date
+
         return ArticleData(
-            doc_id=raw_data_dict.get("doc_id"),
+            doc_id=doc_id,
             title=raw_data_dict.get("title"),
             content=raw_data_dict.get("content"),
             claim=raw_data_dict.get("claim", None),
             verdict=raw_data_dict.get("verdict", None),
-            publish_date=raw_data_dict.get("publish_date"),
+            publish_date=publish_date_dt,
             url=raw_data_dict.get("url"),
+            source=raw_data_dict.get("source"),
+            type=raw_data_dict.get("type"),
+            author=raw_data_dict.get("author", None),
+            source_bias=raw_data_dict.get("source_bias"),
         )
 
     def extract_data_from_json(self) -> list[RawData]:
@@ -95,23 +145,45 @@ class BaseEmbedding:
                 except json.JSONDecodeError as e:
                     raise e
 
-    def extract(self) -> tuple[list[dict], list[dict]]:
-        """Entry point of base, the only function that we call outside base"""
-        self.extract_data_from_json()
+    def extract_from_data(
+        self, raw_datas: list[dict], start_idx: int = None, end_idx: int = None
+    ) -> tuple[list[dict], list[dict]]:
+        """Extract article data and vectors from a list of dictionaries."""
+        if start_idx is not None or end_idx is not None:
+            raw_datas = raw_datas[start_idx:end_idx]
 
         article_vectors: list[EmbeddedData] = []
         articles: list[ArticleData] = []
 
-        for raw_data in self.raw_datas:
-            raw_data = RawData(**raw_data)
+        print(f"\nProcessing {len(raw_datas)} articles...")
+        for raw_data_dict in tqdm(
+            raw_datas, desc="Generating embeddings", unit="article"
+        ):
+            raw_data = RawData(**raw_data_dict)
+
+            # Skip articles with no content or publish_date
+            if not raw_data.content or not raw_data.publish_date:
+                continue
 
             article_vectors += self.generate_article_vector(raw_data)
             articles.append(self.generate_article(raw_data))
 
+        print(
+            f"\nConverting {len(articles)} articles and {len(article_vectors)} vectors to dictionaries..."
+        )
         article_vector_dicts: list[dict] = [
             asdict(vector) for vector in article_vectors
         ]
         article_dicts: list[dict] = [asdict(article) for article in articles]
 
         return (article_vector_dicts, article_dicts)
+
+    def extract(
+        self, start_idx: int = None, end_idx: int = None
+    ) -> tuple[list[dict], list[dict]]:
+        """Entry point of base, the only function that we call outside base"""
+        self.extract_data_from_json()
+        return self.extract_from_data(
+            self.raw_datas, start_idx=start_idx, end_idx=end_idx
+        )
         # TODO: save to DB? or save as file? idk mane

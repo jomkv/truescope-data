@@ -5,24 +5,58 @@ from datetime import datetime
 from dataclasses import asdict
 import asyncio
 import traceback
+from data_cleaning.rapplerCleaner import clean_article as RapplerCleaner
+from .utils import (
+    save_article_async,
+    get_existing_articles_urls,
+    DATE_LIMIT,
+    MAX_PAGES as UTILS_MAX_PAGES,
+    MAX_CONSECUTIVE_OLD,
+    MAX_CONSECUTIVE_NO_NEW_LINKS,
+    EMBEDDER,
+)
+
+# Using shared EMBEDDER from utils
+
+
+async def save_article(article: dict):
+    return await save_article_async(article, RapplerCleaner, EMBEDDER)
 
 
 class RapplerScraper(BaseScraper):
-    def __init__(self):
+    def __init__(self, start_page: int = 1):
         super().__init__(
             output_filename="rappler-factcheck",
             retry_filename="rappler-factcheck-retry",
         )
+        self.start_page = start_page
+        self.restart_interval = 2  # In pages
+        self.log_clear_interval = 1  # In pages
 
     async def process(self) -> None:
         await self.start()
 
         # Track page
         curr_page: int = 1
+        consecutive_too_old = 0
+        consecutive_no_new_links = 0
+
+        #  Fetch existing URLs from the database once per run
+        existing_urls = get_existing_articles_urls(EMBEDDER, source="RAPPLER")
+        print(f"Loaded {len(existing_urls)} existing articles to skip duplicates.")
 
         try:
             while True:
-                print(f"Navigating to page {curr_page}")
+                if (
+                    curr_page % self.restart_interval == 0
+                    and curr_page != self.start_page
+                ):
+                    print(
+                        f"Restarting browser at page {curr_page} for memory management"
+                    )
+                    await self.restart()
+
+                print(f"\n--- Navigating to Rappler page {curr_page} ---")
                 await self.navigate_with_retry(
                     f"https://www.rappler.com/newsbreak/fact-check/page/{curr_page}"
                 )
@@ -30,11 +64,31 @@ class RapplerScraper(BaseScraper):
                 print("Locating article contents")
                 articles = await self.locate_articles()
 
+                if not articles:
+                    print("No more articles found on this page.")
+                    break
+
                 print("Extracting URLs from articles")
                 urls = await self.extract_urls(articles)
 
-                print("Scraping through article URLs")
-                for url in urls:
+                if len(urls) == 0:
+                    print("No URLs extracted - may have reached the end")
+                    break
+
+                # Check for new links vs already in database
+                new_links_on_page = [url for url in urls if url not in existing_urls]
+                
+                if not new_links_on_page:
+                    consecutive_no_new_links += 1
+                    print(f"No new links found on page {curr_page} ({consecutive_no_new_links}/{MAX_CONSECUTIVE_NO_NEW_LINKS})")
+                    if consecutive_no_new_links >= MAX_CONSECUTIVE_NO_NEW_LINKS:
+                        print(f"Stopping: {consecutive_no_new_links} consecutive pages with no new links.")
+                        break
+                else:
+                    consecutive_no_new_links = 0
+
+                print(f"Processing {len(new_links_on_page)} new URLs")
+                for url in new_links_on_page:
                     article_data = await self.extract_data_from_url(url)
 
                     if article_data == None:
@@ -42,11 +96,25 @@ class RapplerScraper(BaseScraper):
 
                     article_data_dict = asdict(article_data)
 
-                    await self.append_to_json(article_data_dict)
+                    # Real-time cleaning and saving to database
+                    # save_article returns False only if skipped due to age
+                    is_recent = await save_article(article_data_dict)
+
+                    if not is_recent:
+                        consecutive_too_old += 1
+                        if consecutive_too_old >= MAX_CONSECUTIVE_OLD:
+                            print(
+                                f"Stop requested: {consecutive_too_old} consecutive articles are too old (before {DATE_LIMIT})."
+                            )
+                            await self.quit()
+                            return
+                    else:
+                        consecutive_too_old = 0  # Reset on any valid found article
 
                     await asyncio.sleep(2)
 
                 curr_page += 1
+                await self.clear_logs_and_gc()
 
         except Exception as e:
             print(traceback.format_exc())

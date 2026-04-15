@@ -10,3 +10,7 @@ class ArticleData:
     verdict: str | None
     publish_date: str
     url: str
+    source: str
+    type: str
+    author: list[str] | None = None
+    source_bias: str | None = None

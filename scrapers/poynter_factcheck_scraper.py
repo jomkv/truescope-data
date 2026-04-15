@@ -6,6 +6,22 @@ import asyncio
 import traceback
 import csv
 from pathlib import Path
+from data_cleaning.poynterCleaner import clean_article as PoynterCleaner
+from data_embedding.embedder import Embedding
+from .utils import (
+    save_article_async,
+    get_existing_articles_urls,
+    DATE_LIMIT,
+    MAX_PAGES as UTILS_MAX_PAGES,
+    MAX_CONSECUTIVE_OLD,
+)
+
+# Initialize embedder once to reuse the model
+EMBEDDER = Embedding(input_file="")
+
+
+async def save_article(article: dict):
+    return await save_article_async(article, PoynterCleaner, EMBEDDER)
 
 
 class PoynterFactcheckScraper(BaseScraper):
@@ -52,13 +68,23 @@ class PoynterFactcheckScraper(BaseScraper):
             print("No URLs found in CSV file")
             return
 
+        #  Fetch existing URLs from the database once per run
+        existing_urls = get_existing_articles_urls(EMBEDDER, source="POYNTER")
+        print(f"Loaded {len(existing_urls)} existing articles to skip duplicates.")
+
         # Track current index for restart intervals
         curr_index = self.start_index
+        consecutive_too_old = 0
 
         try:
             print(f"Starting to scrape {len(urls)} articles...")
             
-            for i, url in enumerate(urls):
+            for url in urls:
+                #  Skip if already in database
+                if url in existing_urls:
+                    curr_index += 1
+                    continue
+
                 # Restart browser periodically for memory management
                 if (curr_index % self.restart_interval == 0 and curr_index != self.start_index):
                     print(f"Restarting browser at article {curr_index} for memory management")
@@ -72,9 +98,23 @@ class PoynterFactcheckScraper(BaseScraper):
                     curr_index += 1
                     continue
 
-                # Save to JSON
+                # Clean and save to database
                 article_data_dict = asdict(article_data)
-                await self.append_to_json(article_data_dict)
+                
+                # Real-time cleaning and saving to database
+                # save_article returns False only if skipped due to age
+                is_recent = await save_article(article_data_dict)
+
+                if not is_recent:
+                    consecutive_too_old += 1
+                    if consecutive_too_old >= MAX_CONSECUTIVE_OLD:
+                        print(
+                            f" Stop requested: {consecutive_too_old} consecutive articles are too old (before {DATE_LIMIT})."
+                        )
+                        await self.quit()
+                        return
+                else:
+                    consecutive_too_old = 0  # Reset on any valid found article
 
                 # Small delay between requests
                 await asyncio.sleep(0.5)
@@ -83,13 +123,11 @@ class PoynterFactcheckScraper(BaseScraper):
                 
                 # Progress update
                 if curr_index % 5 == 0:
-                    print(f"Progress: {curr_index - self.start_index + 1}/{len(urls)} articles processed")
+                    print(f"Progress: {curr_index - self.start_index}/{len(urls)} articles processed")
 
                 # Clear logs periodically
                 if curr_index % self.log_clear_interval == 0:
                     await self.clear_logs_and_gc()
-
-            print(f"Completed scraping {len(urls)} articles")
 
         except Exception as e:
             print(traceback.format_exc())

@@ -1,14 +1,14 @@
-from core.db import Base
+from core.base import Base
 from sqlalchemy import Column, String, DateTime
-
 
 class Article(Base):
     __tablename__ = "articles"
 
     doc_id = Column(String, primary_key=True)
-    title = Column(String, nullable=False)
-    content = Column(String, nullable=False)
-    claim = Column(String)
-    verdict = Column(String)
-    publish_date = Column(DateTime, nullable=False)
-    url = Column(String, nullable=False)
+    publish_date = Column(DateTime, nullable=True) # Matches your local 'timestamp without time zone'
+    title = Column(String, nullable=True)
+    content = Column(String, nullable=True)
+    url = Column(String, nullable=True)
+    source = Column(String, nullable=True)
+    type = Column(String, nullable=True)
+    source_bias = Column(String, nullable=True)

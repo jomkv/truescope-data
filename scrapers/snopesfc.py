@@ -1,0 +1,513 @@
+import json
+import time
+import sys
+import random
+from pathlib import Path
+from urllib.parse import urlparse, urljoin
+import re
+from datetime import datetime, timezone, timedelta
+from dateutil import parser
+from playwright.sync_api import (
+    sync_playwright,
+    TimeoutError as PlaywrightTimeoutError,
+    Error as PlaywrightError,
+)
+import asyncio
+import gc
+import os
+
+root_dir = Path(__file__).resolve().parent.parent
+if str(root_dir) not in sys.path:
+    sys.path.append(str(root_dir))
+from data_cleaning.snopesCleaner import clean_article as SnopesCleaner
+from .utils import (
+    save_article_sync,
+    get_existing_articles_urls,
+    DATE_LIMIT,
+    MAX_PAGES,
+    MAX_CONSECUTIVE_OLD,
+    MAX_CONSECUTIVE_NO_NEW_LINKS,
+    EMBEDDER,
+)
+
+# Using shared EMBEDDER from utils
+
+
+def save_article(article: dict, ignore_date_limit: bool = False):
+    return save_article_sync(
+        article, SnopesCleaner, EMBEDDER, ignore_date_limit=ignore_date_limit
+    )
+
+
+def _first_locator_text(page, selectors):
+    for sel in selectors:
+        try:
+            l = page.locator(sel)
+            if l.count() > 0:
+                txt = l.first.inner_text().strip()
+                if txt:
+                    return txt
+        except Exception:
+            continue
+    return None
+
+
+def scrape_snopes_article(page, url):
+    try:
+        page.goto(url, timeout=90000)
+
+        title = None
+        # Prefer Snopes article title locations
+        try:
+            t = page.locator(
+                ".title-container h1, main#article_main .title-container h1, .title-container h1[itemprop=headline]"
+            )
+            if t.count() > 0:
+                title = t.first.inner_text().strip()
+        except Exception:
+            title = None
+
+        # generic fallbacks
+        if not title:
+            for sel in [
+                "h1.entry-title",
+                "h1.post-title",
+                "h1[itemprop=headline]",
+                "article h1",
+                "h1",
+            ]:
+                try:
+                    t = page.locator(sel)
+                    if t.count() > 0:
+                        title = t.first.inner_text().strip()
+                        break
+                except Exception:
+                    continue
+
+        # claim: Snopes shows the claim text inside #fact_check_rating_container -> .claim_cont
+        claim = None
+        try:
+            c = page.locator("#fact_check_rating_container .claim_cont, .claim_cont")
+            if c.count() > 0:
+                claim = c.first.inner_text().strip()
+        except Exception:
+            claim = None
+
+        # fallback: find heading that contains 'Claim' then take next sibling
+        if not claim:
+            try:
+                heads = page.locator("h3, h2, strong")
+                for i in range(min(50, heads.count())):
+                    try:
+                        h = heads.nth(i)
+                        ht = h.inner_text().strip()
+                    except Exception:
+                        continue
+                    if "claim" in ht.lower():
+                        try:
+                            sib = h.evaluate_handle("node => node.nextElementSibling")
+                            if sib:
+                                txt = page.evaluate("node => node.innerText", sib)
+                                if txt:
+                                    claim = txt.strip()
+                                    break
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+
+        # verdict/rating: prefer the Snopes rating block
+        verdict = None
+        try:
+            v = page.locator(
+                "#main_rating .rating_title_wrap, #fact_check_rating_container .rating_wrapper .rating_title_wrap"
+            )
+            if v.count() > 0:
+                verdict = v.first.inner_text().strip()
+
+                verdict = verdict.split("\n")[0].strip()
+            else:
+                # sometimes the rating is in an image alt or text inside rating block
+                img = page.locator("#main_rating img, #fact_check_rating_container img")
+                if img.count() > 0:
+                    alt = img.first.get_attribute("alt")
+                    if alt:
+                        verdict = alt.strip()
+        except Exception:
+            verdict = None
+
+        # fallback: look for labels like 'Truth:','Rating' etc
+        if not verdict:
+            try:
+                spans = page.locator("span, strong, p")
+                for i in range(min(100, spans.count())):
+                    try:
+                        s = spans.nth(i)
+                        st = s.inner_text().strip()
+                    except Exception:
+                        continue
+                    if any(
+                        k in st.lower()
+                        for k in ["truth", "rating", "rating:", "label:"]
+                    ):
+                        verdict = st
+                        break
+            except Exception:
+                pass
+
+        # author and date
+        author = None
+        date_str = None
+        try:
+            # author: prefer author link in title section or author-container
+            author = _first_locator_text(
+                page,
+                [
+                    ".title-container .author_name a.author_link",
+                    ".author-container .author_name a.author_link",
+                    ".author_name a",
+                    ".author_name",
+                ],
+            )
+
+            # date: common Snopes publish date location
+            d = page.locator(
+                ".published_date .publish_date, .publish_date, .author-container .publish_date, .published_date"
+            )
+            if d.count() > 0:
+                date_str = d.first.inner_text().strip()
+            else:
+                # fallback to time/meta
+                t = page.locator("time, meta[property='article:published_time']")
+                if t.count() > 0:
+                    for i in range(t.count()):
+                        el = t.nth(i)
+                        try:
+                            dt_attr = el.get_attribute("datetime")
+                        except Exception:
+                            dt_attr = None
+                        if dt_attr:
+                            date_str = dt_attr
+                            break
+                    if not date_str:
+                        try:
+                            date_str = t.first.inner_text().strip()
+                        except Exception:
+                            date_str = None
+        except Exception:
+            pass
+
+        # content paragraphs (prefer Snopes article content)
+        paragraphs = []
+        for sel in [
+            "#article-content p",
+            "article#article-content p",
+            ".entry-content p",
+            "article .entry-content p",
+            "article p",
+            "div.article-body p",
+            "div.entry p",
+        ]:
+            try:
+                ps = page.locator(sel).all()
+                if ps:
+                    out = []
+                    for p in ps:
+                        try:
+                            in_figure = p.evaluate(
+                                "node => !!node.closest('figure') || !!node.closest('figcaption')"
+                            )
+                            if in_figure:
+                                continue
+                            text = p.inner_text().strip()
+                            if text:
+                                out.append(text)
+                        except Exception:
+                            continue
+                    if out:
+                        paragraphs = out
+                        break
+            except Exception:
+                continue
+
+        # fallback: whole article text
+        if not paragraphs:
+            try:
+                container = page.locator(".entry-content, .article-body, article")
+                if container.count() > 0:
+                    txt = container.first.inner_text().strip()
+                    if txt:
+                        paragraphs = [
+                            ln.strip() for ln in txt.split("\n") if ln.strip()
+                        ]
+            except Exception:
+                pass
+
+        content = "\n".join(paragraphs) if paragraphs else None
+        if content.lower().startswith("about this rating"):
+            content = "\n".join(content.split("\n")[1:]).strip()
+
+        if not title or not content:
+            return {"url": url, "skipped": True, "reason": "Missing title or content"}
+
+        publishDate = None
+        if date_str:
+            try:
+                clean_date = re.sub(r"\s+Share.*$", "", date_str)
+                dt = parser.parse(clean_date)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone(timedelta(hours=0)))
+                publishDate = dt.isoformat()
+            except Exception:
+                publishDate = date_str
+
+        domain = urlparse(url).netloc.replace("www.", "")
+        source = domain.split(".")[0] if domain else "snopes"
+
+        return {
+            "title": title,
+            "content": content,
+            "publishDate": publishDate,
+            "author": author,
+            "url": url,
+            "source": "SNOPES",
+            "type": "fact-check",
+            "sourceBias": None,
+            "claim": claim,
+            "verdict": verdict,
+        }
+
+    except PlaywrightTimeoutError:
+        return {"url": url, "skipped": True, "reason": "Timeout loading article"}
+    except PlaywrightError as e:
+        return {"url": url, "skipped": True, "reason": str(e)}
+    except Exception as e:
+        return {"url": url, "skipped": True, "reason": str(e)}
+
+
+def collect_and_scrape_listing(listing_url, max_attempts=3):
+    print(f"Connecting to database to verify existing URLs...")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+
+        #  Fetch existing URLs from the database once per run
+        existing_urls = get_existing_articles_urls(EMBEDDER, source="SNOPES")
+        print(f"Loaded {len(existing_urls)} existing articles to skip duplicates.")
+
+        url = listing_url
+        discovered_urls = set()
+        visited_pages = set()
+
+        page_count = 0
+        consecutive_no_new_links = 0
+        while url:
+            page_count += 1
+            if url in visited_pages:
+                print(
+                    "Already visited this listing page  stopping to avoid loop:", url
+                )
+                break
+            visited_pages.add(url)
+
+            loaded = False
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    page.goto(url, timeout=60000)
+                    loaded = True
+                    break
+                except Exception as e:
+                    wait = 0.5 * (2 ** (attempt - 1))
+                    print(
+                        f"Attempt {attempt}/{max_attempts} failed for {url}: {e}. Retrying in {wait:.1f}s..."
+                    )
+                    time.sleep(wait)
+
+            if not loaded:
+                print(
+                    f"Failed to load listing page after {max_attempts} attempts: {url}"
+                )
+                break
+
+            # Collect article links from Snopes listing markup
+            # primary selector: anchors wrapped inside article list container
+            anchors = page.locator(
+                "#article-list .article_wrapper a.outer_article_link_wrapper, #list_template_wrapper .article_wrapper a.outer_article_link_wrapper"
+            ).all()
+            new_links = []
+            if not anchors:
+                # fallback to any anchors that look like fact-check links
+                anchors = page.locator("a").all()
+
+            for a in anchors:
+                try:
+                    href = a.get_attribute("href")
+                except Exception:
+                    href = None
+                if not href:
+                    continue
+                if href.startswith("/"):
+                    href = urljoin(listing_url, href)
+                parsed = urlparse(href)
+                domain = parsed.netloc.replace("www.", "")
+                if (
+                    "snopes.com" in domain
+                    and "/fact-check/" in parsed.path
+                    and href not in discovered_urls
+                ):
+                    #  Skip if already in database
+                    if href in existing_urls:
+                        continue
+                    new_links.append(href)
+                    discovered_urls.add(href)
+
+            print(f"New links this cycle: {len(new_links)}")
+            if not new_links:
+                consecutive_no_new_links += 1
+                if consecutive_no_new_links >= MAX_CONSECUTIVE_NO_NEW_LINKS:
+                    print(
+                        f"Stopping: {consecutive_no_new_links} consecutive pages with no new links. Pagination halted to save time."
+                    )
+                    break
+            else:
+                consecutive_no_new_links = 0
+            consecutive_too_old = 0
+            for link in new_links:
+                print(f"Scraping: {link}")
+                max_scrape_attempts = 3
+                data = None
+
+                for scrape_attempt in range(1, max_scrape_attempts + 1):
+                    article_page = browser.new_page()
+                    try:
+                        data = scrape_snopes_article(article_page, link)
+                        if not data.get("skipped"):
+                            break  # Success!
+                        else:
+                            print(
+                                f"  Attempt {scrape_attempt}/{max_scrape_attempts} failed: {data['reason']}"
+                            )
+                    finally:
+                        article_page.close()
+
+                    if scrape_attempt < max_scrape_attempts:
+                        time.sleep(1)  # wait before retry
+
+                if data and not data.get("skipped"):
+                    # save_article returns False only if skipped due to age
+                    is_recent = save_article(data)
+                    if not is_recent:
+                        consecutive_too_old += 1
+                        if consecutive_too_old >= MAX_CONSECUTIVE_OLD:
+                            print(
+                                f" Stop requested: {consecutive_too_old} consecutive articles are too old (before {DATE_LIMIT})."
+                            )
+                            # We break out of the link loop AND need to break out of pagination
+                            browser.close()
+                            return
+                    else:
+                        consecutive_too_old = 0  # Reset on any valid recent article
+                else:
+                    print(
+                        f" FAILED to scrape after {max_scrape_attempts} attempts: {link}"
+                    )
+
+                time.sleep(random.uniform(0.6, 1.3))
+
+            # pagination: check Snopes-specific next button or common rel/aria selectors
+            next_href = None
+            try:
+                sel = page.query_selector(
+                    'a.next-button, #next-previous a.next-button, a[rel="next"], a.next, a[aria-label="Next"]'
+                )
+                if sel:
+                    nh = sel.get_attribute("href")
+                    if nh:
+                        next_href = nh
+            except Exception:
+                pass
+
+            # fallback: look for links with '/page/' or 'pagenum=' or '?page='
+            if not next_href:
+                try:
+                    p_anchors = page.locator("a").all()
+                    candidates = {}
+                    for a in p_anchors:
+                        try:
+                            href = a.get_attribute("href")
+                        except Exception:
+                            href = None
+                        if not href:
+                            continue
+                        if (
+                            "/page/" in href
+                            or "pagenum=" in href
+                            or "page=" in href
+                            or "?p=" in href
+                        ):
+                            full = urljoin(listing_url, href)
+                            candidates[full] = full
+                    # choose the first candidate that is not the current page
+                    for cand in sorted(candidates.keys()):
+                        if cand != url:
+                            next_href = cand
+                            break
+                except Exception:
+                    next_href = None
+
+            if next_href:
+                next_url = urljoin(listing_url, next_href)
+                if next_url == url:
+                    print("Pagination next link same as current page  stopping.")
+                    break
+                print(f"Following pagination to: {next_url}")
+
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+
+                time.sleep(0.5)
+
+                try:
+                    browser = p.chromium.launch(headless=True)
+                    page = browser.new_page()
+                except Exception as e:
+                    print(f"Failed to relaunch browser: {e}")
+                    break
+
+                url = next_url
+                time.sleep(0.5)
+
+                # Force garbage collection
+                gc.collect()
+                print(f"Memory cleared and garbage collected at {datetime.now().strftime('%H:%M:%S')}")
+                
+                continue
+            else:
+                print("No pagination link found  stopping.")
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+                break
+
+        try:
+            browser.close()
+        except Exception:
+            pass
+
+        print("\nScraping complete.")
+
+
+async def main():
+    await asyncio.to_thread(
+        collect_and_scrape_listing, "https://www.snopes.com/fact-check/?pagenum=1"
+    )
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    asyncio.run(main())

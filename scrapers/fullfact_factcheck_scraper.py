@@ -4,6 +4,22 @@ from data_class.raw_data import RawData
 from dataclasses import asdict
 import asyncio
 import traceback
+from data_cleaning.fullfactCleaner import clean_article as FullFactCleaner
+from .utils import (
+    save_article_async,
+    get_existing_articles_urls,
+    DATE_LIMIT,
+    MAX_PAGES as UTILS_MAX_PAGES,
+    MAX_CONSECUTIVE_OLD,
+    MAX_CONSECUTIVE_NO_NEW_LINKS,
+    EMBEDDER,
+)
+
+# Using shared EMBEDDER from utils
+
+
+async def save_article(article: dict):
+    return await save_article_async(article, FullFactCleaner, EMBEDDER)
 
 
 class FullfactFactcheckScraper(BaseScraper):
@@ -18,9 +34,13 @@ class FullfactFactcheckScraper(BaseScraper):
 
     async def process(self) -> None:
         await self.start()
-
-        # Track page
         curr_page: int = self.start_page
+        consecutive_too_old = 0
+        consecutive_no_new_links = 0
+
+        #  Fetch existing URLs from the database once per run
+        existing_urls = get_existing_articles_urls(EMBEDDER, source="FULLFACT")
+        print(f"Loaded {len(existing_urls)} existing articles to skip duplicates.")
 
         try:
             while True:
@@ -33,7 +53,7 @@ class FullfactFactcheckScraper(BaseScraper):
                     )
                     await self.restart()
 
-                # print(f"Navigating to page {curr_page}")
+                print(f"\n--- Navigating to Full Fact page {curr_page} ---")
                 await self.navigate_with_retry(
                     f"https://fullfact.org/latest/?page={curr_page}"
                 )
@@ -41,17 +61,42 @@ class FullfactFactcheckScraper(BaseScraper):
                 urls = await self.extract_article_urls()
 
                 if len(urls) == 0:
-                    print("📄 No more articles found - scraping complete")
+                    print("No more articles found - scraping complete")
                     break
 
-                # print("Scraping through article URLs")
-                for url in urls:
-                    article_datas = await self.extract_data_from_url(url)
+                # Check for new links vs already in database
+                new_links_on_page = [url for url in urls if url not in existing_urls]
+                
+                if not new_links_on_page:
+                    consecutive_no_new_links += 1
+                    print(f"No new links found on page {curr_page} ({consecutive_no_new_links}/{MAX_CONSECUTIVE_NO_NEW_LINKS})")
+                    if consecutive_no_new_links >= MAX_CONSECUTIVE_NO_NEW_LINKS:
+                        print(f"Stopping: {consecutive_no_new_links} consecutive pages with no new links.")
+                        break
+                else:
+                    consecutive_no_new_links = 0
 
+                print(f"Processing {len(new_links_on_page)} new URLs")
+                for url in new_links_on_page:
+                    article_datas = await self.extract_data_from_url(url)
+                    
                     for article_data in article_datas:
                         article_data_dict = asdict(article_data)
 
-                        await self.append_to_json(article_data_dict)
+                        # Real-time cleaning and saving to database
+                        # save_article returns False only if skipped due to age
+                        is_recent = await save_article(article_data_dict)
+
+                        if not is_recent:
+                            consecutive_too_old += 1
+                            if consecutive_too_old >= MAX_CONSECUTIVE_OLD:
+                                print(
+                                    f"Stop requested: {consecutive_too_old} consecutive articles are too old (before {DATE_LIMIT})."
+                                )
+                                await self.quit()
+                                return
+                        else:
+                            consecutive_too_old = 0  # Reset on any valid found article
 
                     await asyncio.sleep(0.5)
 

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 class EmbeddedData:
     chunk_id: str
     doc_id: str
+    chunk_content: str
     embedding: list[int]
     source: str
     type: str
